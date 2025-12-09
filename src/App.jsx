@@ -1,10 +1,17 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import confetti from 'canvas-confetti';
-import FlashCard from './components/FlashCard';
+
+// Game Modes
+import FlashCardGame from './components/GameModes/FlashCardGame';
+import HearingGame from './components/GameModes/HearingGame';
+import SpellingGame from './components/GameModes/SpellingGame';
+
+// Shared Components
 import ScoreBoard from './components/ScoreBoard';
 import Controls from './components/Controls';
 import ParentZone from './components/ParentZone';
+
 import { defaultDictionaryId } from './data/dictionaries';
 import {
   getActiveWordPool,
@@ -15,10 +22,9 @@ import {
 function App() {
   // --- STATE ---
   /* 
-    V2 State Structure:
-    activeDictionaries: string[] 
-    wordStats: { [word: string]: { correct: number, incorrect: number, streak: number, status: 'learning'|'mastered' } }
-    globalStats: { score: number, streak: number }
+    State has expanded for Phase 2:
+    currentGameMode: 'flashcard' | 'hearing' | 'spelling'
+    previewDuration: number (logic handled in SpellingGame)
   */
 
   const [word, setWord] = useState("Ready?");
@@ -26,7 +32,10 @@ function App() {
   const [wordStats, setWordStats] = useState({});
   const [globalStats, setGlobalStats] = useState({ score: 0, streak: 0 });
 
-  const [mode, setMode] = useState("Current Targets");
+  // Settings
+  const [mode, setMode] = useState("Current Targets"); // Word Difficulty
+  const [gameMode, setGameMode] = useState("flashcard");
+  const [previewDuration, setPreviewDuration] = useState(3000);
   const [showParentZone, setShowParentZone] = useState(false);
 
   // Derived State (Word Pool)
@@ -40,6 +49,9 @@ function App() {
       if (data.activeDictionaries) setActiveDictionaries(data.activeDictionaries);
       if (data.wordStats) setWordStats(data.wordStats);
       if (data.globalStats) setGlobalStats(data.globalStats);
+      // Load Phase 2 settings if present
+      if (data.gameMode) setGameMode(data.gameMode);
+      if (data.previewDuration) setPreviewDuration(data.previewDuration);
     }
   }, []);
 
@@ -48,19 +60,21 @@ function App() {
     const dataToSave = {
       activeDictionaries,
       wordStats,
-      globalStats
+      globalStats,
+      gameMode,
+      previewDuration
     };
     localStorage.setItem('nora_v2_data', JSON.stringify(dataToSave));
-  }, [activeDictionaries, wordStats, globalStats]);
+  }, [activeDictionaries, wordStats, globalStats, gameMode, previewDuration]);
 
-  // Initial Word (or when pool changes if current word invalid)
+  // Initial Word
   useEffect(() => {
     if (word === "Ready?" || word === "Done!") {
       if (wordPool.length > 0) {
         setWord(getRandomWordV2(mode, wordPool, wordStats));
       }
     }
-  }, [wordPool, mode]); // Depend on pool and mode
+  }, [wordPool, mode]);
 
   const triggerConfetti = () => {
     const duration = 1000;
@@ -75,52 +89,39 @@ function App() {
   };
 
   const handleCorrect = () => {
-    // 1. Update Global Stats
     setGlobalStats(prev => ({
       score: prev.score + 10,
       streak: prev.streak + 1
     }));
     triggerConfetti();
 
-    // 2. Update Word Stats
     const newStats = updateWordStats(word, true, wordStats);
-    const newWordStats = { ...wordStats, [word]: newStats };
-    setWordStats(newWordStats);
-
-    // 3. Get Next Word
-    setWord(getRandomWordV2(mode, wordPool, newWordStats));
+    setWordStats(prev => ({ ...prev, [word]: newStats }));
+    setWord(getRandomWordV2(mode, wordPool, { ...wordStats, [word]: newStats }));
   };
 
   const handleIncorrect = () => {
-    // 1. Update Global Stats
     setGlobalStats(prev => ({ ...prev, streak: 0 }));
 
-    // 2. Update Word Stats
+    // In Spelling Mode, maybe we don't punish immediately? 
+    // For now, consistent logic across all modes.
     const newStats = updateWordStats(word, false, wordStats);
-    setWordStats({ ...wordStats, [word]: newStats });
-
-    // 3. Get Next Word
-    // Note: We might want to pass the OLD stats to getRandomWord if we want to retry logic?
-    // But for now, just random again.
-    setWord(getRandomWordV2(mode, wordPool, wordStats));
+    setWordStats(prev => ({ ...prev, [word]: newStats }));
+    setWord(getRandomWordV2(mode, wordPool, { ...wordStats, [word]: newStats }));
   };
 
   const handleReset = () => {
-    if (confirm("Are you sure you want to reset all V2 progress?")) {
+    if (confirm("Are you sure you want to reset all progress?")) {
       setWordStats({});
       setGlobalStats({ score: 0, streak: 0 });
-      setActiveDictionaries([defaultDictionaryId]);
-      localStorage.removeItem('nora_v2_data');
-      setShowParentZone(false);
-      setWord("Ready?");
-      // Effect will pick new word
+      localStorage.clear();
+      window.location.reload(); // Cleanest way to reset everything for now
     }
   };
 
   const toggleDictionary = (id) => {
     setActiveDictionaries(prev => {
       if (prev.includes(id)) {
-        // Prevent removing the last one?
         if (prev.length === 1) return prev;
         return prev.filter(d => d !== id);
       } else {
@@ -130,9 +131,9 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-between pb-safe select-none">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-between pb-safe select-none overflow-hidden touch-none">
       <header className="w-full bg-white shadow-sm py-4 mb-4 px-4 flex justify-between items-center relative gap-4">
-        <div className="w-10"></div> {/* Spacer */}
+        <div className="w-10"></div>
         <h1 className="text-xl sm:text-3xl font-bold text-slate-700 text-center flex-grow truncate">
           ⭐ Nora's Sight Words ⭐
         </h1>
@@ -145,9 +146,31 @@ function App() {
         </button>
       </header>
 
-      <div className="w-full flex-grow flex flex-col items-center justify-center max-w-4xl px-4 gap-6">
+      {/* Game Content Area */}
+      {gameMode === 'flashcard' && <FlashCardGame word={word} />}
+      {gameMode === 'hearing' && <HearingGame word={word} />}
+      {gameMode === 'spelling' && (
+        <SpellingGame
+          word={word}
+        // In future we might let SpellingGame handle correctness itself,
+        // but for now relying on the main controls for consistency?
+        // Actually, spelling usually validates itself. 
+        // BUT Controls are shared. 
+        // Let's keep shared controls for simple valid/invalid marking by parent/child
+        // even if visual feedback says "Correct".
+        />
+      )}
+
+      {/* Shared Stats */}
+      <div className="absolute top-20 left-4 z-0 opacity-20 pointer-events-none scale-75 origin-top-left hidden sm:block">
+        {/* Could put stats floating here for desktop, but mobile is priority. 
+             ScoreBoard is inside App layout usually. 
+         */}
+      </div>
+
+      {/* We need ScoreBoard visible always */}
+      <div className="w-full max-w-4xl px-4">
         <ScoreBoard score={globalStats.score} streak={globalStats.streak} />
-        <FlashCard word={word} />
       </div>
 
       <Controls onCorrect={handleCorrect} onIncorrect={handleIncorrect} />
@@ -157,6 +180,10 @@ function App() {
         onClose={() => setShowParentZone(false)}
         currentMode={mode}
         onModeChange={setMode}
+        currentGameMode={gameMode}
+        onGameModeChange={setGameMode}
+        previewDuration={previewDuration}
+        onPreviewDurationChange={setPreviewDuration}
         stats={{ wordStats, globalStats }}
         activeDictionaries={activeDictionaries}
         onDictionaryToggle={toggleDictionary}
